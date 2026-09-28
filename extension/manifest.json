@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Quét Unfollow IG — Local Bridge",
+  "version": "0.1.0",
+  "description": "Bridge local-only giữa dashboard Quét Unfollow IG và tab Instagram đã đăng nhập.",
+  "permissions": [
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.instagram.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://hyu276.github.io/QuetUnfollowIGSmallScale/*",
+        "http://localhost/*",
+        "https://*.vercel.app/*"
+      ],
+      "js": [
+        "dashboard-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "Quét Unfollow IG — Local Bridge"
+  }
+}

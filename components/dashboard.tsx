@@ -78,8 +78,15 @@ export default function Dashboard() {
   useEffect(() => {
     sendBridge<{ version: string }>("PING", undefined, 2500).then((response) => {
       if (response.ok) {
+        const version = response.data?.version || "0.0.0";
+        if (version === "0.1.0") {
+          setBridgeReady(false);
+          setMessage("Extension 0.1.0 đã cũ và có thể gặp lỗi useragent mismatch. Hãy cập nhật thư mục extension từ repo, bấm Reload trong chrome://extensions, rồi tải lại trang.");
+          setMessageKind("bad");
+          return;
+        }
         setBridgeReady(true);
-        setMessage("Extension đã kết nối. Hãy mở một tab instagram.com và đăng nhập.");
+        setMessage(`Extension ${version} đã kết nối. Hãy mở một tab instagram.com và đăng nhập.`);
         setMessageKind("good");
       } else {
         setBridgeReady(false);

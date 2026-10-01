@@ -49,6 +49,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .person { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid #292d38; border-radius: 12px; background: #0f1117; }
 .person .meta { min-width: 0; }
 .person .username { font-weight: 730; color: #f7f8fb; }
+.person .profile-link { text-decoration: none; cursor: pointer; }
+.person .profile-link:hover { text-decoration: underline; }
+.person .profile-link:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 3px; }
 .person .name { color: #8f97a8; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
 .badge { padding: 5px 8px; border-radius: 999px; font-size: 11px; background: #242936; color: #aeb6c8; }
 .empty { color: #777f90; padding: 18px 0; }

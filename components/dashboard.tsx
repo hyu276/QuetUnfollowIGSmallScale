@@ -174,9 +174,9 @@ export default function Dashboard() {
     sendBridge<{ version: string }>("PING", undefined, 2500).then((response) => {
       if (response.ok) {
         const version = response.data?.version || "0.0.0";
-        if (version === "0.1.0" || version === "0.1.1") {
+        if (version === "0.1.0" || version === "0.1.1" || version === "0.1.2") {
           setBridgeReady(false);
-          setMessage(`Extension ${version} đã cũ. Bản 0.1.2 sửa lỗi crawl 0 followers / 0 following. Hãy cập nhật thư mục extension từ repo, bấm Reload trong chrome://extensions, rồi tải lại trang.`);
+          setMessage(`Extension ${version} đã cũ. Bản 0.1.3 sửa lỗi resolve tài khoản khác khi web_profile_info bị 429 hoặc feed-by-username trả HTML. Hãy cập nhật thư mục extension từ repo, bấm Reload trong chrome://extensions, rồi tải lại trang.`);
           setMessageKind("bad");
           return;
         }

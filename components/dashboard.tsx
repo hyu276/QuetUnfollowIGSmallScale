@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { currentRelationshipSets, diffSnapshots } from "@/lib/diff";
+import { compareNotFollowingBack, currentRelationshipSets, diffSnapshots } from "@/lib/diff";
 import { deleteSnapshotIds, deleteSnapshots, listSnapshots, saveSnapshot } from "@/lib/storage";
 import type { BridgeResponse, CrawlResult, CrawlSnapshot, IgPerson, RelationshipDiff } from "@/lib/types";
 
@@ -70,6 +70,7 @@ export default function Dashboard() {
   const [message, setMessage] = useState("Đang kiểm tra Chrome extension…");
   const [messageKind, setMessageKind] = useState<"normal" | "good" | "bad">("normal");
   const [current, setCurrent] = useState<CrawlSnapshot | null>(null);
+  const [previousSnapshot, setPreviousSnapshot] = useState<CrawlSnapshot | null>(null);
   const [previousDiff, setPreviousDiff] = useState<RelationshipDiff>(emptyDiff);
   const [baselineDiff, setBaselineDiff] = useState<RelationshipDiff>(emptyDiff);
   const [compareMode, setCompareMode] = useState<"previous" | "baseline">("previous");
@@ -117,9 +118,11 @@ export default function Dashboard() {
     const snapshots = await listSnapshots(handle.toLowerCase());
     if (!snapshots.length) return;
     const latest = snapshots.at(-1)!;
+    const previous = snapshots.length > 1 ? snapshots.at(-2)! : null;
     setCurrent(latest);
+    setPreviousSnapshot(previous);
     setBaselineDiff(snapshots.length > 1 ? diffSnapshots(snapshots[0], latest) : emptyDiff);
-    setPreviousDiff(snapshots.length > 1 ? diffSnapshots(snapshots.at(-2)!, latest) : emptyDiff);
+    setPreviousDiff(previous ? diffSnapshots(previous, latest) : emptyDiff);
   }
 
   async function crawl() {
@@ -158,8 +161,10 @@ export default function Dashboard() {
 
     await saveSnapshot(snapshot);
     const updatedHistory = [...history, snapshot];
+    const previous = history.length ? history.at(-1)! : null;
     setCurrent(snapshot);
-    setPreviousDiff(history.length ? diffSnapshots(history.at(-1)!, snapshot) : emptyDiff);
+    setPreviousSnapshot(previous);
+    setPreviousDiff(previous ? diffSnapshots(previous, snapshot) : emptyDiff);
     setBaselineDiff(history.length ? diffSnapshots(history[0], snapshot) : emptyDiff);
     setBusy(false);
     setMessage(
@@ -178,6 +183,7 @@ export default function Dashboard() {
     if (!window.confirm(`Xóa toàn bộ snapshot local của @${handle}?`)) return;
     await deleteSnapshots(handle);
     setCurrent(null);
+    setPreviousSnapshot(null);
     setPreviousDiff(emptyDiff);
     setBaselineDiff(emptyDiff);
     setMessage(`Đã xóa dữ liệu local của @${handle}.`);
@@ -185,6 +191,10 @@ export default function Dashboard() {
   }
 
   const relationSets = useMemo(() => (current ? currentRelationshipSets(current) : null), [current]);
+  const nonFollowerChange = useMemo(
+    () => (current && previousSnapshot ? compareNotFollowingBack(previousSnapshot, current) : null),
+    [current, previousSnapshot]
+  );
   const diff = compareMode === "previous" ? previousDiff : baselineDiff;
   const tabItems: Record<TabKey, IgPerson[]> = {
     lostFollowers: diff.lostFollowers,
@@ -223,6 +233,26 @@ export default function Dashboard() {
             <div className="panel stat"><span>Following</span><strong>{current.following.length.toLocaleString()}</strong></div>
             <div className="panel stat"><span>Không follow lại bạn</span><strong>{relationSets?.notFollowingBack.length.toLocaleString()}</strong></div>
             <div className="panel stat"><span>Mutuals</span><strong>{relationSets?.mutuals.length.toLocaleString()}</strong></div>
+          </section>
+
+          <section className="section panel">
+            <h2>Không follow lại bạn hiện tại · {relationSets?.notFollowingBack.length.toLocaleString()}</h2>
+            <p className="section-copy">
+              Danh sách đầy đủ ở snapshot mới nhất. Mục này luôn được hiển thị sau mỗi lần crawl, không phụ thuộc mốc so sánh.
+            </p>
+            <PersonList items={relationSets?.notFollowingBack || []} />
+          </section>
+
+          <section className="section panel">
+            <h2>Mới unfollow bạn kể từ lần crawl trước · {nonFollowerChange?.inferredNewUnfollowers.length.toLocaleString() || "0"}</h2>
+            <p className="section-copy">
+              Chỉ tính tài khoản từng follow bạn ở snapshot trước, hiện không còn follow bạn nhưng bạn vẫn đang follow họ. Người bạn vừa mới follow sẽ không bị gắn nhãn unfollow.
+            </p>
+            {previousSnapshot ? (
+              <PersonList items={nonFollowerChange?.inferredNewUnfollowers || []} />
+            ) : (
+              <div className="empty">Chưa có lần crawl trước để đối chiếu. Hãy crawl lại ở lần tiếp theo.</div>
+            )}
           </section>
 
           <section className="section panel">

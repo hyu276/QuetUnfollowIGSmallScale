@@ -48,11 +48,42 @@ async function executeInstagramTask(tabId, action, payload) {
         try {
           data = text ? JSON.parse(text) : null;
         } catch {
-          const error = new Error(`Instagram trả về dữ liệu không phải JSON (HTTP ${response.status}) tại ${path}.`);
+          const contentType = response.headers.get("content-type") || "unknown";
+          const error =
+            response.status === 429
+              ? new Error(
+                  `Instagram đang rate-limit request (HTTP 429) tại ${path}. Không nên bấm crawl liên tục; hãy chờ một lúc rồi thử lại.`
+                )
+              : new Error(
+                  `Instagram trả về HTML/non-JSON thay vì API JSON (HTTP ${response.status}, content-type: ${contentType}) tại ${path}.`
+                );
           error.status = response.status;
+          error.endpoint = path;
           throw error;
         }
         return { response, data };
+      }
+
+      async function fetchProfileHtml(username) {
+        const path = `/${encodeURIComponent(username)}/`;
+        const response = await fetch(path, {
+          method: "GET",
+          credentials: "include",
+          headers: {
+            accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+          cache: "no-store",
+        });
+        const text = await response.text();
+
+        if (!response.ok) {
+          const error = new Error(`Instagram profile HTML: HTTP ${response.status} tại ${path}.`);
+          error.status = response.status;
+          error.endpoint = path;
+          throw error;
+        }
+
+        return text;
       }
 
       async function requestJson(path) {
@@ -156,7 +187,61 @@ async function executeInstagramTask(tabId, action, payload) {
         const clean = String(username || "").trim().replace(/^@/, "").toLowerCase();
         if (!clean) throw new Error("Username trống.");
 
-        let profileInfoError = null;
+        const errors = [];
+
+        try {
+          const current = await getCurrentAccount();
+          if (current.username?.toLowerCase() === clean && current.id) {
+            return {
+              ...current,
+              followerCount: null,
+              followingCount: null,
+            };
+          }
+        } catch {
+          // Continue with target-account resolvers.
+        }
+
+        const searchPath =
+          `/web/search/topsearch/?query=${encodeURIComponent(clean)}&context=blended&count=10`;
+
+        try {
+          const data = await requestJson(searchPath);
+          const match = (data?.users || [])
+            .map((entry) => entry?.user || entry)
+            .find((user) => String(user?.username || "").toLowerCase() === clean);
+
+          const normalized = normalizeTarget(match, clean);
+          if (normalized) return normalized;
+
+          errors.push(new Error(`Top Search không tìm thấy kết quả chính xác cho @${clean}.`));
+        } catch (error) {
+          errors.push(error);
+        }
+
+        try {
+          const html = await fetchProfileHtml(clean);
+          const profileId =
+            html.match(/"profile_id":"(\d+)"/)?.[1] ||
+            html.match(/&quot;profile_id&quot;:&quot;(\d+)&quot;/)?.[1] ||
+            "";
+
+          if (profileId) {
+            return {
+              id: profileId,
+              username: clean,
+              fullName: "",
+              isPrivate: false,
+              followerCount: null,
+              followingCount: null,
+            };
+          }
+
+          errors.push(new Error(`Profile HTML của @${clean} không chứa profile_id.`));
+        } catch (error) {
+          errors.push(error);
+        }
+
         const profilePath = `/api/v1/users/web_profile_info/?username=${encodeURIComponent(clean)}`;
 
         try {
@@ -166,42 +251,26 @@ async function executeInstagramTask(tabId, action, payload) {
           if (response.ok && data?.data?.user) {
             const normalized = normalizeTarget(data.data.user, clean);
             if (normalized) return normalized;
-          } else if (response.status !== 400) {
-            const detail = data?.message || data?.error_type || `HTTP ${response.status}`;
-            throw new Error(`Instagram web profile: ${detail}`);
           }
+
+          const detail = data?.message || data?.error_type || `HTTP ${response.status}`;
+          throw new Error(`Instagram web_profile_info: ${detail}`);
         } catch (error) {
-          profileInfoError = error;
+          errors.push(error);
         }
 
-        const feedPath = `/api/v1/feed/user/${encodeURIComponent(clean)}/username/?count=1`;
-        try {
-          const data = await requestJson(feedPath);
-          const raw = data?.user || data?.items?.[0]?.user;
-          const normalized = normalizeTarget(raw, clean);
-          if (normalized) return normalized;
-        } catch (feedError) {
-          try {
-            const current = await getCurrentAccount();
-            if (current.username?.toLowerCase() === clean && current.id) {
-              return {
-                ...current,
-                followerCount: null,
-                followingCount: null,
-              };
-            }
-          } catch {
-            // Preserve the resolver errors below.
-          }
+        const messages = errors
+          .map((error) => (error instanceof Error ? error.message : String(error)))
+          .filter(Boolean);
 
-          const profileMessage = profileInfoError instanceof Error ? profileInfoError.message : "";
-          const feedMessage = feedError instanceof Error ? feedError.message : String(feedError);
-          throw new Error(
-            `Không resolve được @${clean}. ${profileMessage ? `${profileMessage}; ` : ""}${feedMessage}`
-          );
-        }
+        const rateLimited = errors.some((error) => Number(error?.status) === 429);
+        const suffix = rateLimited
+          ? " Instagram đang áp rate limit cho ít nhất một resolver; không nên retry liên tục."
+          : "";
 
-        throw new Error(`Không resolve được @${clean}.`);
+        throw new Error(
+          `Không resolve được @${clean}. ${messages.join("; ")}${suffix}`
+        );
       }
 
       function validateCoverage(kind, expectedCount, actualCount) {

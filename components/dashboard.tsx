@@ -44,10 +44,94 @@ function sendBridge<T>(action: string, payload?: unknown, timeout = 180_000): Pr
   });
 }
 
-function PersonList({ items }: { items: IgPerson[] }) {
-  if (!items.length) return <div className="empty">Không có tài khoản nào trong nhóm này.</div>;
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeFilename(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+}
+
+function exportTxt(items: IgPerson[], exportName: string) {
+  const lines = [
+    "username\tfull_name\tvisibility\tinstagram_url",
+    ...items.map((person) =>
+      [
+        `@${person.username}`,
+        person.fullName || "",
+        person.isPrivate ? "Private" : "Public",
+        `https://www.instagram.com/${person.username}/`,
+      ].join("\t")
+    ),
+  ];
+
+  downloadBlob(
+    new Blob(["\uFEFF", lines.join("\n")], { type: "text/plain;charset=utf-8" }),
+    `${safeFilename(exportName) || "instagram-list"}.txt`
+  );
+}
+
+async function exportExcel(items: IgPerson[], exportName: string) {
+  const XLSX = await import("xlsx");
+  const rows = items.map((person, index) => ({
+    STT: index + 1,
+    Username: `@${person.username}`,
+    "Tên hiển thị": person.fullName || "",
+    "Quyền riêng tư": person.isPrivate ? "Private" : "Public",
+    "Instagram URL": `https://www.instagram.com/${person.username}/`,
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  worksheet["!cols"] = [
+    { wch: 7 },
+    { wch: 28 },
+    { wch: 32 },
+    { wch: 16 },
+    { wch: 48 },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Instagram");
+  XLSX.writeFile(workbook, `${safeFilename(exportName) || "instagram-list"}.xlsx`);
+}
+
+function PersonList({ items, exportName }: { items: IgPerson[]; exportName: string }) {
   return (
-    <div className="list">
+    <>
+      <div className="export-actions">
+        <button
+          className="secondary export-button"
+          type="button"
+          disabled={!items.length}
+          onClick={() => void exportExcel(items, exportName)}
+        >
+          Export Excel (.xlsx)
+        </button>
+        <button
+          className="secondary export-button"
+          type="button"
+          disabled={!items.length}
+          onClick={() => exportTxt(items, exportName)}
+        >
+          Export TXT (.txt)
+        </button>
+      </div>
+      {!items.length ? (
+        <div className="empty">Không có tài khoản nào trong nhóm này.</div>
+      ) : (
+        <div className="list">
       {items.map((person) => (
         <div className="person" key={person.id || person.username}>
           <div className="meta">
@@ -65,7 +149,9 @@ function PersonList({ items }: { items: IgPerson[] }) {
           <span className="badge">{person.isPrivate ? "Private" : "Public"}</span>
         </div>
       ))}
-    </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -248,7 +334,10 @@ export default function Dashboard() {
             <p className="section-copy">
               Danh sách đầy đủ ở snapshot mới nhất. Mục này luôn được hiển thị sau mỗi lần crawl, không phụ thuộc mốc so sánh.
             </p>
-            <PersonList items={relationSets?.notFollowingBack || []} />
+            <PersonList
+              items={relationSets?.notFollowingBack || []}
+              exportName={`not-following-back-${current.username}-${current.createdAt.slice(0, 10)}`}
+            />
           </section>
 
           <section className="section panel">
@@ -257,7 +346,10 @@ export default function Dashboard() {
               Chỉ tính tài khoản từng follow bạn ở snapshot trước, hiện không còn follow bạn nhưng bạn vẫn đang follow họ. Người bạn vừa mới follow sẽ không bị gắn nhãn unfollow.
             </p>
             {previousSnapshot ? (
-              <PersonList items={nonFollowerChange?.inferredNewUnfollowers || []} />
+              <PersonList
+                items={nonFollowerChange?.inferredNewUnfollowers || []}
+                exportName={`new-unfollowers-${current.username}-${current.createdAt.slice(0, 10)}`}
+              />
             ) : (
               <div className="empty">Chưa có lần crawl trước để đối chiếu. Hãy crawl lại ở lần tiếp theo.</div>
             )}
@@ -284,7 +376,10 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            <PersonList items={tabItems[tab]} />
+            <PersonList
+              items={tabItems[tab]}
+              exportName={`${tab}-${compareMode}-${current.username}-${current.createdAt.slice(0, 10)}`}
+            />
           </section>
 
           <section className="section panel">

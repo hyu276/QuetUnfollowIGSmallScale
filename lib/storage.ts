@@ -56,3 +56,16 @@ export async function deleteSnapshots(username: string) {
   });
   db.close();
 }
+
+export async function deleteSnapshotIds(ids: string[]) {
+  if (!ids.length) return;
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    for (const id of ids) store.delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { currentRelationshipSets, diffSnapshots } from "@/lib/diff";
-import { deleteSnapshots, listSnapshots, saveSnapshot } from "@/lib/storage";
+import { deleteSnapshotIds, deleteSnapshots, listSnapshots, saveSnapshot } from "@/lib/storage";
 import type { BridgeResponse, CrawlResult, CrawlSnapshot, IgPerson, RelationshipDiff } from "@/lib/types";
 
 declare global {
@@ -79,9 +79,9 @@ export default function Dashboard() {
     sendBridge<{ version: string }>("PING", undefined, 2500).then((response) => {
       if (response.ok) {
         const version = response.data?.version || "0.0.0";
-        if (version === "0.1.0") {
+        if (version === "0.1.0" || version === "0.1.1") {
           setBridgeReady(false);
-          setMessage("Extension 0.1.0 đã cũ và có thể gặp lỗi useragent mismatch. Hãy cập nhật thư mục extension từ repo, bấm Reload trong chrome://extensions, rồi tải lại trang.");
+          setMessage(`Extension ${version} đã cũ. Bản 0.1.2 sửa lỗi crawl 0 followers / 0 following. Hãy cập nhật thư mục extension từ repo, bấm Reload trong chrome://extensions, rồi tải lại trang.`);
           setMessageKind("bad");
           return;
         }
@@ -133,7 +133,7 @@ export default function Dashboard() {
     setMessage(`Đang crawl @${handle}. Với tài khoản lớn, quá trình có thể cần nhiều trang dữ liệu.`);
     setMessageKind("normal");
 
-    const history = await listSnapshots(handle);
+    let history = await listSnapshots(handle);
     const response = await sendBridge<CrawlResult>("CRAWL", { username: handle });
     if (!response.ok || !response.data) {
       setBusy(false);
@@ -143,6 +143,19 @@ export default function Dashboard() {
     }
 
     const snapshot = response.data.snapshot;
+
+    if (snapshot.followers.length > 0 || snapshot.following.length > 0) {
+      const invalidEmptySnapshots = history.filter(
+        (item) => item.followers.length === 0 && item.following.length === 0
+      );
+      if (invalidEmptySnapshots.length) {
+        await deleteSnapshotIds(invalidEmptySnapshots.map((item) => item.id));
+        history = history.filter(
+          (item) => item.followers.length > 0 || item.following.length > 0
+        );
+      }
+    }
+
     await saveSnapshot(snapshot);
     const updatedHistory = [...history, snapshot];
     setCurrent(snapshot);

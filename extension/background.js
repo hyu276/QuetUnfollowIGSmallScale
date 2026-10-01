@@ -1,7 +1,4 @@
 const APP_ID = "936619743392459";
-const ASBD_ID = "129";
-const HASH_FOLLOWING = "3dec7e2c57367ef3da3d987d89f9dbc8";
-const HASH_FOLLOWERS = "c76146de99bb02f6415203be841dd25a";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message)
@@ -30,15 +27,13 @@ async function executeInstagramTask(tabId, action, payload) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    args: [action, payload, APP_ID, ASBD_ID, HASH_FOLLOWING, HASH_FOLLOWERS],
-    func: async (task, input, appId, asbdId, hashFollowing, hashFollowers) => {
+    args: [action, payload, APP_ID],
+    func: async (task, input, appId) => {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const jitter = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
       const BASE_HEADERS = {
         accept: "*/*",
         "x-ig-app-id": appId,
-        "x-asbd-id": asbdId,
-        "x-requested-with": "XMLHttpRequest",
       };
 
       async function fetchJson(path) {
@@ -74,14 +69,46 @@ async function executeInstagramTask(tabId, action, payload) {
 
       function cookie(name) {
         const prefix = `${name}=`;
-        const part = document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith(prefix));
+        const part = document.cookie
+          .split(";")
+          .map((item) => item.trim())
+          .find((item) => item.startsWith(prefix));
         return part ? decodeURIComponent(part.slice(prefix.length)) : "";
       }
 
-      function normalizeUser(user, fallbackUsername = "") {
+      function asCount(value) {
+        const n = Number(value);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      }
+
+      function normalizeTarget(user, fallbackUsername = "") {
         if (!user) return null;
         const id = user.pk ?? user.pk_id ?? user.id;
         const username = user.username || fallbackUsername;
+        if (!id || !username) return null;
+
+        return {
+          id: String(id),
+          username: String(username),
+          fullName: user.full_name || user.fullName || "",
+          isPrivate: Boolean(user.is_private),
+          followerCount: asCount(
+            user.edge_followed_by?.count ??
+              user.follower_count ??
+              user.followers_count
+          ),
+          followingCount: asCount(
+            user.edge_follow?.count ??
+              user.following_count ??
+              user.followings_count
+          ),
+        };
+      }
+
+      function normalizeUser(user) {
+        if (!user) return null;
+        const id = user.pk ?? user.pk_id ?? user.id;
+        const username = user.username;
         if (!id || !username) return null;
         return {
           id: String(id),
@@ -100,6 +127,7 @@ async function executeInstagramTask(tabId, action, payload) {
           "/api/v1/accounts/current_user/?edit=true",
         ];
         let lastError = null;
+
         for (const path of candidates) {
           try {
             const data = await requestJson(path);
@@ -116,9 +144,11 @@ async function executeInstagramTask(tabId, action, payload) {
             lastError = error;
           }
         }
+
         if (viewerId) {
           return { id: viewerId, username: "", fullName: "", isPrivate: false };
         }
+
         throw lastError || new Error("Không xác định được tài khoản Instagram đang đăng nhập.");
       }
 
@@ -126,22 +156,15 @@ async function executeInstagramTask(tabId, action, payload) {
         const clean = String(username || "").trim().replace(/^@/, "").toLowerCase();
         if (!clean) throw new Error("Username trống.");
 
-        try {
-          const current = await getCurrentAccount();
-          if (current.username && current.username.toLowerCase() === clean && current.id) {
-            return current;
-          }
-        } catch {
-          // Continue with web resolvers below.
-        }
-
         let profileInfoError = null;
         const profilePath = `/api/v1/users/web_profile_info/?username=${encodeURIComponent(clean)}`;
+
         try {
           const { response, data } = await fetchJson(profilePath);
           if (response.status === 404) throw new Error(`Không tìm thấy @${clean}.`);
+
           if (response.ok && data?.data?.user) {
-            const normalized = normalizeUser(data.data.user, clean);
+            const normalized = normalizeTarget(data.data.user, clean);
             if (normalized) return normalized;
           } else if (response.status !== 400) {
             const detail = data?.message || data?.error_type || `HTTP ${response.status}`;
@@ -155,97 +178,102 @@ async function executeInstagramTask(tabId, action, payload) {
         try {
           const data = await requestJson(feedPath);
           const raw = data?.user || data?.items?.[0]?.user;
-          const normalized = normalizeUser(raw, clean);
+          const normalized = normalizeTarget(raw, clean);
           if (normalized) return normalized;
         } catch (feedError) {
+          try {
+            const current = await getCurrentAccount();
+            if (current.username?.toLowerCase() === clean && current.id) {
+              return {
+                ...current,
+                followerCount: null,
+                followingCount: null,
+              };
+            }
+          } catch {
+            // Preserve the resolver errors below.
+          }
+
           const profileMessage = profileInfoError instanceof Error ? profileInfoError.message : "";
           const feedMessage = feedError instanceof Error ? feedError.message : String(feedError);
-          throw new Error(`Không resolve được @${clean}. ${profileMessage ? `${profileMessage}; ` : ""}${feedMessage}`);
+          throw new Error(
+            `Không resolve được @${clean}. ${profileMessage ? `${profileMessage}; ` : ""}${feedMessage}`
+          );
         }
 
         throw new Error(`Không resolve được @${clean}.`);
       }
 
-      async function fetchRelationshipGraphQL(userId, kind) {
-        const all = new Map();
-        const hash = kind === "following" ? hashFollowing : hashFollowers;
-        const edgeKey = kind === "following" ? "edge_follow" : "edge_followed_by";
-        let cursor = "";
-        let page = 0;
-        const maxPages = 500;
+      function validateCoverage(kind, expectedCount, actualCount) {
+        if (!Number.isFinite(expectedCount)) return;
 
-        do {
-          const variables = {
-            id: String(userId),
-            include_reel: false,
-            fetch_mutual: false,
-            first: 24,
-          };
-          if (cursor) variables.after = cursor;
+        if (expectedCount > 0 && actualCount === 0) {
+          throw new Error(
+            `Instagram trả danh sách ${kind} rỗng nhưng profile báo ${expectedCount}. Snapshot bị từ chối để tránh lưu dữ liệu sai.`
+          );
+        }
 
-          const path = `/graphql/query/?query_hash=${hash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-          const data = await requestJson(path);
-          const edge = data?.data?.user?.[edgeKey];
-          if (!edge || !Array.isArray(edge.edges)) {
-            throw new Error(`GraphQL không trả về ${edgeKey}.`);
-          }
-
-          for (const item of edge.edges) {
-            const user = normalizeUser(item?.node);
-            if (user) all.set(user.id || user.username.toLowerCase(), user);
-          }
-
-          cursor = edge.page_info?.has_next_page ? String(edge.page_info?.end_cursor || "") : "";
-          page += 1;
-          if (cursor) await sleep(jitter(800, 1600));
-        } while (cursor && page < maxPages);
-
-        if (cursor) throw new Error(`Đã dừng GraphQL sau ${maxPages} trang để tránh crawl quá mức.`);
-        return [...all.values()];
+        const tolerance = Math.max(5, Math.ceil(expectedCount * 0.02));
+        if (expectedCount > tolerance && actualCount < expectedCount - tolerance) {
+          throw new Error(
+            `Danh sách ${kind} có vẻ chưa đầy đủ: lấy được ${actualCount}/${expectedCount}. Snapshot bị từ chối; hãy thử lại sau.`
+          );
+        }
       }
 
-      async function fetchRelationshipRest(userId, kind) {
+      async function fetchRelationship(userId, kind, expectedCount) {
         const all = new Map();
+        const seenCursors = new Set();
         let maxId = "";
         let page = 0;
         const maxPages = 500;
 
-        do {
+        while (page < maxPages) {
           const params = new URLSearchParams({ count: "50" });
           if (maxId) params.set("max_id", maxId);
-          const data = await requestJson(`/api/v1/friendships/${encodeURIComponent(userId)}/${kind}/?${params}`);
+
+          const data = await requestJson(
+            `/api/v1/friendships/${encodeURIComponent(userId)}/${kind}/?${params.toString()}`
+          );
+
           if (!Array.isArray(data?.users)) {
-            throw new Error(`REST không trả về danh sách ${kind}.`);
+            throw new Error(`Instagram không trả về mảng users hợp lệ cho ${kind}.`);
           }
+
+          const sizeBefore = all.size;
           for (const raw of data.users) {
             const user = normalizeUser(raw);
             if (user) all.set(user.id || user.username.toLowerCase(), user);
           }
-          maxId = data.next_max_id ? String(data.next_max_id) : "";
+
+          const nextCursor = data.next_max_id == null ? "" : String(data.next_max_id);
+          const hasMore = typeof data.has_more === "boolean" ? data.has_more : Boolean(nextCursor);
+
           page += 1;
-          if (maxId) await sleep(jitter(800, 1600));
-        } while (maxId && page < maxPages);
 
-        if (maxId) throw new Error(`Đã dừng REST sau ${maxPages} trang để tránh crawl quá mức.`);
-        return [...all.values()];
-      }
+          if (!hasMore || data.users.length === 0) break;
+          if (!nextCursor) {
+            throw new Error(`Instagram báo còn trang ${kind} nhưng không trả pagination cursor.`);
+          }
+          if (seenCursors.has(nextCursor)) {
+            throw new Error(`Instagram lặp pagination cursor khi tải ${kind}; crawl bị dừng để tránh snapshot thiếu.`);
+          }
+          if (all.size === sizeBefore) {
+            throw new Error(`Trang ${kind} mới không bổ sung tài khoản nào; crawl bị dừng để tránh snapshot thiếu.`);
+          }
 
-      async function fetchRelationship(userId, kind) {
-        let graphqlError = null;
-        try {
-          return await fetchRelationshipGraphQL(userId, kind);
-        } catch (error) {
-          graphqlError = error;
-          console.warn(`[QuetUnfollowIG] GraphQL ${kind} thất bại, chuyển sang REST fallback`, error);
+          seenCursors.add(nextCursor);
+          maxId = nextCursor;
+          await sleep(jitter(550, 950));
         }
 
-        try {
-          return await fetchRelationshipRest(userId, kind);
-        } catch (restError) {
-          const gqlMessage = graphqlError instanceof Error ? graphqlError.message : String(graphqlError || "");
-          const restMessage = restError instanceof Error ? restError.message : String(restError);
-          throw new Error(`Không thể tải ${kind}. GraphQL: ${gqlMessage}. REST fallback: ${restMessage}.`);
+        if (page >= maxPages && maxId) {
+          throw new Error(`Đã dừng sau ${maxPages} trang ${kind} để tránh crawl quá mức.`);
         }
+
+        const users = [...all.values()];
+        validateCoverage(kind, expectedCount, users.length);
+        return users;
       }
 
       try {
@@ -261,9 +289,19 @@ async function executeInstagramTask(tabId, action, payload) {
           const requestedUsername = String(input?.username || "").trim().replace(/^@/, "").toLowerCase();
           const target = await resolveUser(requestedUsername);
 
-          const following = await fetchRelationship(target.id, "following");
-          await sleep(jitter(1000, 1800));
-          const followers = await fetchRelationship(target.id, "followers");
+          const following = await fetchRelationship(target.id, "following", target.followingCount);
+          await sleep(jitter(900, 1500));
+          const followers = await fetchRelationship(target.id, "followers", target.followerCount);
+
+          if (
+            following.length === 0 &&
+            followers.length === 0 &&
+            ((target.followingCount ?? 0) > 0 || (target.followerCount ?? 0) > 0)
+          ) {
+            throw new Error(
+              "Instagram trả về snapshot 0/0 trái với số liệu profile. Snapshot bị từ chối và không được lưu."
+            );
+          }
 
           const createdAt = new Date().toISOString();
           return {
@@ -281,6 +319,7 @@ async function executeInstagramTask(tabId, action, payload) {
             },
           };
         }
+
         return { ok: false, error: "Unknown task." };
       } catch (error) {
         return {

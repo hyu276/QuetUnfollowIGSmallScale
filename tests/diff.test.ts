@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentRelationshipSets, diffSnapshots } from "../lib/diff";
+import { compareNotFollowingBack, currentRelationshipSets, diffSnapshots } from "../lib/diff";
 import type { CrawlSnapshot, IgPerson } from "../lib/types";
 
 const p = (id: string, username = id): IgPerson => ({ id, username });
@@ -28,4 +28,21 @@ test("computes mutual and one-way relationships", () => {
   assert.deepEqual(sets.mutuals.map((x) => x.id), ["b"]);
   assert.deepEqual(sets.notFollowingBack.map((x) => x.id), ["c"]);
   assert.deepEqual(sets.youDoNotFollowBack.map((x) => x.id), ["a"]);
+});
+
+test("infers new unfollowers without mislabeling newly followed accounts", () => {
+  const previous = snap(
+    [p("a"), p("b")],
+    [p("a"), p("b"), p("x")]
+  );
+  const current = snap(
+    [p("a")],
+    [p("a"), p("b"), p("x"), p("y")]
+  );
+
+  const change = compareNotFollowingBack(previous, current);
+
+  assert.deepEqual(change.addedToNotFollowingBack.map((x) => x.id), ["b", "y"]);
+  assert.deepEqual(change.inferredNewUnfollowers.map((x) => x.id), ["b"]);
+  assert.deepEqual(change.leftNotFollowingBack.map((x) => x.id), []);
 });

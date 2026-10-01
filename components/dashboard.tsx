@@ -51,7 +51,15 @@ function PersonList({ items }: { items: IgPerson[] }) {
       {items.map((person) => (
         <div className="person" key={person.id || person.username}>
           <div className="meta">
-            <div className="username">@{person.username}</div>
+            <a
+              className="username profile-link"
+              href={`https://www.instagram.com/${encodeURIComponent(person.username)}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Mở trang Instagram của @${person.username} trong tab mới`}
+            >
+              @{person.username}
+            </a>
             <div className="name">{person.fullName || "—"}</div>
           </div>
           <span className="badge">{person.isPrivate ? "Private" : "Public"}</span>

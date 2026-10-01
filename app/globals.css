@@ -45,6 +45,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .section { margin-top: 26px; }
 .section h2 { margin: 0 0 8px; font-size: 22px; }
 .section-copy { margin: 0 0 16px; color: #969eaf; }
+.export-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
+.export-button { padding: 9px 12px; font-size: 12px; }
 .list { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
 .person { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid #292d38; border-radius: 12px; background: #0f1117; }
 .person .meta { min-width: 0; }
